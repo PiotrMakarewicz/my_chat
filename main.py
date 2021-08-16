@@ -1,7 +1,13 @@
 import socket
 import threading
+import requests
+import tkinter as tk
 
-TCP_IP = socket.gethostbyname(socket.gethostname())
+TCP_IP_LOCAL = socket.gethostbyname(socket.gethostname())
+try:
+    TCP_IP_PUBLIC = requests.get('https://api.ipify.org').text
+except:
+    TCP_IP_PUBLIC = 'unknown'
 TCP_PORT = 3485
 MSG_LEN_SIZE = 8
 MSG_TOTAL_SIZE = 256
@@ -58,9 +64,9 @@ def handle_user_input(s):
         # print('Received user input:', msg)
 
 def do_listen():
-    print('Listening...')
+    print(f'Listening under public IP {TCP_IP_PUBLIC} and local IP {TCP_IP_LOCAL}')
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind((TCP_IP, TCP_PORT))
+        s.bind((TCP_IP_LOCAL, TCP_PORT))
         s.listen(1)
         conn, addr = s.accept()
         addr = f'{addr[0]}:{addr[1]}'
@@ -73,19 +79,25 @@ def do_listen():
 
 def do_connect():
     ip = input('What IP do you want to connect to?')
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    except:
+        raise Exception(f'Failed to connect to {ip}')
+    try:
         s.connect((ip, TCP_PORT))
         addr = ':'.join((ip, str(TCP_PORT)))
         print('Connected to', addr)
         incoming_messages_thread = threading.Thread(
             target=handle_incoming_messages, args=(s, addr))
         incoming_messages_thread.start()
-        handle_user_input(s)  
+        handle_user_input(s)
+    finally:
+        s.close()
 
 
 while True:
-    ans = input('Do you want to listen (L) or connect (C)?')
-    if ans.upper() == 'L':
+    ans = input('Do you want to wait (W) for another user or connect (C) them? ')
+    if ans.upper() == 'W':
         socket_thread = threading.Thread(target=do_listen)
         break
     elif ans.upper() == 'C': 
