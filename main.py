@@ -40,20 +40,17 @@ class GlobalVars:
 
 g = GlobalVars()
 
-# TODO: blokowanie czatu przed uzyskaniem połączenia
-# TODO: wysyłanie wiadomości enterem
 # TODO: ustawianie nicku przez !username
 
 def on_disconnect():
     g.RUNNING = False
+    g.wnd_chat.disable_sending()
     if g.socket:
         g.socket.close()
     if g.waiting_socket:
         g.waiting_socket.close()
-    for i in range(5,-1,-1):
-        time.sleep(1)
         g.wnd_chat.display_application_message(
-            f'Disconnected. The application will close in {i} seconds...')
+            f'Disconnected. You may now close the window.')
     g.wnd_chat.destroy()
 
 
@@ -184,15 +181,19 @@ class ChatWindow(tk.Tk):
         self.text_area.config(state='disabled')
         self.text_area.grid(row=0, column=0, columnspan=2, sticky='NSEW')
 
-        self.ent_message = tk.Entry(self)
+        self.ent_message = tk.Entry(self, state='disabled')
         self.ent_message.grid(row=1, column=0, sticky='EW')
+        self.ent_message.bind('<Return>', self.on_return_press)
 
         self.btn_send = tk.Button(self,
                                   text='Send!',
-                                  command=self.__on_send_button_click)
+                                  command=self.__on_send_button_click,
+                                  state='disabled')
         self.btn_send.grid(row=1, column=1, sticky='EW')
 
         self.bind('<<Message>>', self.__handle_message)
+        self.bind('<<Enable>>', self.__handle_enable)
+        self.bind('<<Disable>>', self.__handle_disable)
 
         self.message_queue = Queue()
 
@@ -215,15 +216,39 @@ class ChatWindow(tk.Tk):
     def display_other_user_message(self, str):
         self.display_message(f'[{self.config.OTHER_USERNAME}] {str}')
 
+    def enable_sending(self):
+        self.event_generate('<<Enable>>')
+
+    def __handle_enable(self, event):
+        self.ent_message.config(state='normal')
+        self.btn_send.config(state='normal')
+
+    def disable_sending(self):
+        self.event_generate('<<Disable>>')
+    
+    def __handle_disable(self, event):
+        self.ent_message.config(state='disabled')
+        self.btn_send.config(state='disabled')
+
     def __handle_message(self, event):
         message = self.message_queue.get()
         self.write_line_in_text_area(message)
+    
+    def on_return_press(self, event):
+        self.__on_send_button_click()
 
     def __on_send_button_click(self):
         message = self.ent_message.get()
+        if message == '':
+            return
         self.ent_message.delete(0, tk.END)
         send_message(message)
-        self.display_user_message(message)
+        if message.startswith('!username '):
+            new_username = message[len('!username '):]
+            g.wnd_chat.display_application_message(f'You have set your username to `{new_username}`')
+            g.USERNAME = new_username
+        elif message:
+            self.display_user_message(message)
 
     def mainloop(self):
         super().mainloop()
@@ -231,6 +256,7 @@ class ChatWindow(tk.Tk):
 
 
 def handle_incoming_messages(s):
+    g.wnd_chat.enable_sending()
     g.socket = s
     send_message(f'!username {g.USERNAME}')
     while g.RUNNING:
