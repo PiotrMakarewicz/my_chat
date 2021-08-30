@@ -39,12 +39,7 @@ class GlobalVars:
 
 g = GlobalVars()
 
-# TODO: wątek pingujący i rozłączający
-# TODO: odpowiadanie na pingi
-# TODO: bezpieczne zamykanie socketów
-# TODO: timeout przy próbie połączenia
-# TODO: zamykanie on_disconnect
-# TODO: zamykanie na zamknięcie okna
+# TODO: blokowanie czatu przed uzyskaniem połączenia
 
 def on_disconnect():
     g.RUNNING = False
@@ -56,6 +51,7 @@ def on_disconnect():
         time.sleep(1)
         g.wnd_chat.display_application_message(
             f'Disconnected. The application will close in {i} seconds...')
+    g.wnd_chat.destroy()
 
 
 def send_message(msg):
@@ -86,50 +82,6 @@ def receive_message():
     msg_len = int(data[:g.MSG_LEN_SIZE].strip())
     msg_text = data[g.MSG_LEN_SIZE:(g.MSG_LEN_SIZE + msg_len)]
     return msg_text
-
-
-def handle_incoming_messages(s):
-    g.socket = s
-    while g.RUNNING:
-        message = receive_message()
-        if message:
-            g.wnd_chat.display_other_user_message(message)
-    if s:
-        s.close()
-        g.socket = None
-
-
-def do_listen():
-    g.wnd_chat.display_application_message(
-        f'Listening under public IP {g.TCP_IP_PUBLIC} and local IP {g.TCP_IP_LOCAL}'
-    )
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        g.waiting_socket = s
-        s.bind((g.TCP_IP_LOCAL, g.TCP_PORT))
-        s.listen(1)
-        conn, addr = s.accept()
-        addr = f'{addr[0]}:{addr[1]}'
-        g.wnd_chat.display_application_message(f'User at {addr} has connected.')
-        incoming_messages_thread = threading.Thread(
-            target=handle_incoming_messages,
-            args=(conn, ),
-            name='IncomingMessagesThread')
-        incoming_messages_thread.start()
-
-
-def do_connect(ip):
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        s.connect((ip, g.TCP_PORT))
-    except:
-        raise Exception(f'Failed to connect to {ip}')
-    addr = ':'.join((ip, str(g.TCP_PORT)))
-    g.wnd_chat.display_application_message(f'Successfully connected to {addr}.')
-    incoming_messages_thread = threading.Thread(
-        target=handle_incoming_messages,
-        args=(s, ),
-        name='IncomingMessagesThread')
-    incoming_messages_thread.start()
 
 
 def get_data_from_connection_dialog(g):
@@ -202,6 +154,7 @@ def get_data_from_connection_dialog(g):
 
     def get_data_and_destroy_window():
         nonlocal data
+        g.USERNAME = ent_address.get()
         data = option.get(), str(ent_address.get())
         connection_dialog.destroy()
 
@@ -246,13 +199,6 @@ class ChatWindow(tk.Tk):
         self.text_area.insert(tk.END, f'{str}\n')
         self.text_area.config(state='disabled')
 
-    def display_wait_chosen_message(self):
-        self.display_application_message(
-            'Waiting for another user to connect...')
-
-    def display_connect_chosen_message(self):
-        self.display_application_message('Connecting...')
-
     def display_application_message(self, str):
         self.display_message(f'[MyChat] {str}')
 
@@ -281,8 +227,40 @@ class ChatWindow(tk.Tk):
         self.config.RUNNING = False
 
 
-mode, ip = get_data_from_connection_dialog(g)
-g.wnd_chat = ChatWindow(g)
+def handle_incoming_messages(s):
+    g.socket = s
+    while g.RUNNING:
+        message = receive_message()
+        if message:
+            g.wnd_chat.display_other_user_message(message)
+    if s:
+        s.close()
+        g.socket = None
+
+
+def do_listen():
+    g.wnd_chat.display_application_message(
+        f'Listening under public IP {g.TCP_IP_PUBLIC} and local IP {g.TCP_IP_LOCAL}'
+    )
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        g.waiting_socket = s
+        s.bind((g.TCP_IP_LOCAL, g.TCP_PORT))
+        s.listen(1)
+        conn, addr = s.accept()
+        addr = f'{addr[0]}:{addr[1]}'
+        g.wnd_chat.display_application_message(f'User at {addr} has connected.')
+        handle_incoming_messages(conn)
+
+
+def do_connect(ip):
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.connect((ip, g.TCP_PORT))
+    except:
+        raise Exception(f'Failed to connect to {ip}')
+    addr = ':'.join((ip, str(g.TCP_PORT)))
+    g.wnd_chat.display_application_message(f'Successfully connected to {addr}.')
+    handle_incoming_messages(s)
 
 
 def setup_sockets(ip):
@@ -294,14 +272,14 @@ def setup_sockets(ip):
         g.wnd_chat.display_application_message(f'Connecting to {ip}...')
         do_connect(ip)
 
+mode, ip = get_data_from_connection_dialog(g)
+g.wnd_chat = ChatWindow(g)
 
 socket_thread = threading.Thread(target=setup_sockets,
                                  args=(ip, ),
-                                 name='SocketThread')
+                                 name='SocketThread',
+                                 daemon=True)
 socket_thread.start()
-try:
-    g.wnd_chat.mainloop()
-except Exception as e:
-    g.wnd_chat.display_application_message(str(e))
+g.wnd_chat.mainloop()
 
 sys.exit(0)
