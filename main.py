@@ -1,119 +1,159 @@
+import atexit
 import socket
 import threading
-import requests
 import tkinter as tk
+import tkinter.scrolledtext
+import requests
+import time
+import sys
 
-TCP_IP_LOCAL = socket.gethostbyname(socket.gethostname())
-try:
-    TCP_IP_PUBLIC = requests.get('https://api.ipify.org').text
-except:
-    TCP_IP_PUBLIC = 'unknown'
-TCP_PORT = 3485
-MSG_LEN_SIZE = 8
-MSG_TOTAL_SIZE = 256
+from queue import Queue
+
+
+def close_all_sockets():
+    if g.socket:
+        g.socket.close()
+    if g.waiting_socket:
+        g.waiting_socket.close()
+
+
+atexit.register(close_all_sockets)
+
+class GlobalVars:
+    def __init__(self):
+        self.TCP_IP_LOCAL = socket.gethostbyname(socket.gethostname())
+        try:
+            self.TCP_IP_PUBLIC = requests.get('https://api.ipify.org').text
+        except:
+            self.TCP_IP_PUBLIC = 'unknown'
+        self.TCP_PORT = 1250
+        self.MSG_LEN_SIZE = 8
+        self.MSG_TOTAL_SIZE = 256
+        self.USERNAME = 'you'
+        self.OTHER_USERNAME = 'other user'
+        self.RUNNING = True
+        self.socket = None
+        self.waiting_socket = None
+        self.wnd_chat = None
+
+
+g = GlobalVars()
 
 # TODO: wątek pingujący i rozłączający
-# TODO: odpowiadanie na pingi 
+# TODO: odpowiadanie na pingi
+# TODO: bezpieczne zamykanie socketów
+# TODO: timeout przy próbie połączenia
+# TODO: zamykanie on_disconnect
+# TODO: zamykanie na zamknięcie okna
+
+def on_disconnect():
+    g.RUNNING = False
+    if g.socket:
+        g.socket.close()
+    if g.waiting_socket:
+        g.waiting_socket.close()
+    for i in range(10,-1,-1):
+        time.sleep(1)
+        g.wnd_chat.display_application_message(
+            f'Disconnected. The application will close in {i} seconds...')
 
 
-def send_message(s, msg):
-    len_str = str(len(msg)).ljust(MSG_LEN_SIZE)
+def send_message(msg):
+    len_str = str(len(msg)).ljust(g.MSG_LEN_SIZE)
     content_str = msg
     data = (len_str + content_str).encode()
-    data = data + bytes(MSG_TOTAL_SIZE - len(data))
+    data = data + bytes(g.MSG_TOTAL_SIZE - len(data))
     total_sent_bytes = 0
-    while total_sent_bytes < MSG_TOTAL_SIZE:
-        sent_bytes = s.send(data[total_sent_bytes:])
-        #print(f'Sent {sent_bytes} bytes')
+    while total_sent_bytes < g.MSG_TOTAL_SIZE:
+        sent_bytes = g.socket.send(data[total_sent_bytes:])
         if sent_bytes == 0:
-            raise RuntimeError("socket connection broken")
+            on_disconnect()
+            break
         total_sent_bytes += sent_bytes
 
 
-def receive_message(s):
+def receive_message():
     chunks = []
     bytes_received = 0
-    while bytes_received < MSG_TOTAL_SIZE:
-        chunk = s.recv(min(MSG_TOTAL_SIZE - bytes_received, 2048))
+    while bytes_received < g.MSG_TOTAL_SIZE:
+        chunk = g.socket.recv(min(g.MSG_TOTAL_SIZE - bytes_received, 2048))
         if chunk == b'':
-            raise RuntimeError("socket connection broken")
+            on_disconnect()
+            break
         chunks.append(chunk)
         bytes_received += len(chunk)
-        # print(f'Received {bytes_received} bytes')
     data = b''.join(chunks).decode()
-    msg_len = int(data[:MSG_LEN_SIZE].strip())
-    msg_text = data[MSG_LEN_SIZE:(MSG_LEN_SIZE + msg_len)]
+    msg_len = int(data[:g.MSG_LEN_SIZE].strip())
+    msg_text = data[g.MSG_LEN_SIZE:(g.MSG_LEN_SIZE + msg_len)]
     return msg_text
 
 
-def handle_incoming_messages(s, sender):
-    while True:
-        message = receive_message(s)
-        print(f'[{sender}]', message)
-
-
-def handle_user_input(s):
-    print('Now you may send messages')
-    while (True):
-        msg = input()
-        send_message(s, msg)
-        # print('Received user input:', msg)
+def handle_incoming_messages(s):
+    g.socket = s
+    while g.RUNNING:
+        message = receive_message()
+        if message:
+            g.wnd_chat.display_other_user_message(message)
+    if s:
+        s.close()
+        g.socket = None
 
 
 def do_listen():
-    print(
-        f'Listening under public IP {TCP_IP_PUBLIC} and local IP {TCP_IP_LOCAL}'
+    g.wnd_chat.display_application_message(
+        f'Listening under public IP {g.TCP_IP_PUBLIC} and local IP {g.TCP_IP_LOCAL}'
     )
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind((TCP_IP_LOCAL, TCP_PORT))
+        g.waiting_socket = s
+        s.bind((g.TCP_IP_LOCAL, g.TCP_PORT))
         s.listen(1)
         conn, addr = s.accept()
         addr = f'{addr[0]}:{addr[1]}'
-        print(addr, 'has connected')
+        g.wnd_chat.display_application_message(f'User at {addr} has connected.')
         incoming_messages_thread = threading.Thread(
-            target=handle_incoming_messages, args=(conn, addr))
+            target=handle_incoming_messages,
+            args=(conn, ),
+            name='IncomingMessagesThread')
         incoming_messages_thread.start()
-        handle_user_input(conn)
 
 
-def do_connect(ip, *args):
-    print(ip, *args)
+def do_connect(ip):
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect((ip, g.TCP_PORT))
     except:
         raise Exception(f'Failed to connect to {ip}')
-    try:
-        s.connect((ip, TCP_PORT))
-        addr = ':'.join((ip, str(TCP_PORT)))
-        print('Connected to', addr)
-        incoming_messages_thread = threading.Thread(
-            target=handle_incoming_messages, args=(s, addr))
-        incoming_messages_thread.start()
-        handle_user_input(s)
-    finally:
-        s.close()
+    addr = ':'.join((ip, str(g.TCP_PORT)))
+    g.wnd_chat.display_application_message(f'Successfully connected to {addr}.')
+    incoming_messages_thread = threading.Thread(
+        target=handle_incoming_messages,
+        args=(s, ),
+        name='IncomingMessagesThread')
+    incoming_messages_thread.start()
 
 
-def get_data_from_connection_dialog():
+def get_data_from_connection_dialog(g):
     connection_dialog = tk.Tk()
 
-    connection_dialog.title('MyChat | Connection dialog')
+    connection_dialog.protocol('WM_DELETE_WINDOW', sys.exit)
+    connection_dialog.title('MyChat')
     connection_dialog.rowconfigure([6, 7], pad=20)
 
     localip_desc = 'Your local IP address:'
     lbl_localip_desc = tk.Label(connection_dialog, text=localip_desc)
     lbl_localip_desc.grid(row=0, column=0, sticky='NESW')
-    lbl_localip = tk.Label(connection_dialog, text=TCP_IP_LOCAL)
+    lbl_localip = tk.Label(connection_dialog, text=g.TCP_IP_LOCAL)
     lbl_localip.grid(row=0, column=1, sticky='NESW')
 
     publicip_desc = 'Your public IP address:'
     lbl_publicip_desc = tk.Label(connection_dialog, text=publicip_desc)
     lbl_publicip_desc.grid(row=1, column=0, sticky='NESW')
-    lbl_publicip = tk.Label(connection_dialog, text=TCP_IP_PUBLIC)
+    lbl_publicip = tk.Label(connection_dialog, text=g.TCP_IP_PUBLIC)
     lbl_publicip.grid(row=1, column=1, sticky='NESW')
 
     displayed_name_desc = 'Your displayed name:'
-    lbl_displayed_name_desc = tk.Label(connection_dialog, text=displayed_name_desc)
+    lbl_displayed_name_desc = tk.Label(connection_dialog,
+                                       text=displayed_name_desc)
     lbl_displayed_name_desc.grid(row=2, column=0, sticky='NESW')
     ent_displayed_name = tk.Entry(connection_dialog, justify=tk.RIGHT)
     ent_displayed_name.insert(tk.END, 'user')
@@ -123,7 +163,9 @@ def get_data_from_connection_dialog():
 
     option = tk.StringVar()
 
-    ent_address = tk.Entry(connection_dialog, state='disabled', justify=tk.RIGHT)
+    ent_address = tk.Entry(connection_dialog,
+                           state='disabled',
+                           justify=tk.RIGHT)
     ent_address.grid(row=6, column=1, sticky='EW')
 
     def update_ent_address_state():
@@ -171,13 +213,95 @@ def get_data_from_connection_dialog():
     return data
 
 
-mode, ip = get_data_from_connection_dialog()
-if mode == 'wait':
-    socket_thread = threading.Thread(target=do_listen)
-elif mode == 'connect':
-    socket_thread = threading.Thread(target=do_connect, args=[ip])
+class ChatWindow(tk.Tk):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.title('MyChat')
 
-socket_thread.run()
-# with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-#     s.bind((TCP_IP, TCP_PORT))
-#     s.listen()
+        self.columnconfigure(0, minsize=400, weight=1)
+        self.rowconfigure(0, weight=1)
+        self.rowconfigure(1, weight=0)
+
+        self.text_area = tkinter.scrolledtext.ScrolledText(self,
+                                                           bg='lightgray')
+        self.text_area.config(state='disabled')
+        self.text_area.grid(row=0, column=0, columnspan=2, sticky='NSEW')
+
+        self.ent_message = tk.Entry(self)
+        self.ent_message.grid(row=1, column=0, sticky='EW')
+
+        self.btn_send = tk.Button(self,
+                                  text='Send!',
+                                  command=self.__on_send_button_click)
+        self.btn_send.grid(row=1, column=1, sticky='EW')
+
+        self.bind('<<Message>>', self.__handle_message)
+
+        self.message_queue = Queue()
+
+    def write_line_in_text_area(self, str):
+        self.text_area.config(state='normal')
+        print(str)
+        self.text_area.insert(tk.END, f'{str}\n')
+        self.text_area.config(state='disabled')
+
+    def display_wait_chosen_message(self):
+        self.display_application_message(
+            'Waiting for another user to connect...')
+
+    def display_connect_chosen_message(self):
+        self.display_application_message('Connecting...')
+
+    def display_application_message(self, str):
+        self.display_message(f'[MyChat] {str}')
+
+    def display_message(self, str):
+        self.message_queue.put(str)
+        self.event_generate('<<Message>>')
+
+    def display_user_message(self, str):
+        self.display_message(f'[{self.config.USERNAME}] {str}')
+
+    def display_other_user_message(self, str):
+        self.display_message(f'[{self.config.OTHER_USERNAME}] {str}')
+
+    def __handle_message(self, event):
+        message = self.message_queue.get()
+        self.write_line_in_text_area(message)
+
+    def __on_send_button_click(self):
+        message = self.ent_message.get()
+        self.ent_message.delete(0, tk.END)
+        send_message(message)
+        self.display_user_message(message)
+
+    def mainloop(self):
+        super().mainloop()
+        self.config.RUNNING = False
+
+
+mode, ip = get_data_from_connection_dialog(g)
+g.wnd_chat = ChatWindow(g)
+
+
+def setup_sockets(ip):
+    if mode == 'wait':
+        g.wnd_chat.display_application_message(
+            'Waiting for another user to connect...')
+        do_listen()
+    elif mode == 'connect':
+        g.wnd_chat.display_application_message(f'Connecting to {ip}...')
+        do_connect(ip)
+
+
+socket_thread = threading.Thread(target=setup_sockets,
+                                 args=(ip, ),
+                                 name='SocketThread')
+socket_thread.start()
+try:
+    g.wnd_chat.mainloop()
+except Exception as e:
+    g.wnd_chat.display_application_message(str(e))
+
+sys.exit(0)
