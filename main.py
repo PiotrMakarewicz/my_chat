@@ -18,6 +18,7 @@ def close_all_sockets():
 
 
 atexit.register(close_all_sockets)
+atexit.register(print, '[MyChat] Closing...')
 
 class GlobalVars:
     def __init__(self):
@@ -29,8 +30,8 @@ class GlobalVars:
         self.TCP_PORT = 1250
         self.MSG_LEN_SIZE = 8
         self.MSG_TOTAL_SIZE = 256
-        self.USERNAME = 'you'
-        self.OTHER_USERNAME = 'other user'
+        self.USERNAME = 'You'
+        self.OTHER_USERNAME = 'The connected user'
         self.RUNNING = True
         self.socket = None
         self.waiting_socket = None
@@ -40,6 +41,8 @@ class GlobalVars:
 g = GlobalVars()
 
 # TODO: blokowanie czatu przed uzyskaniem połączenia
+# TODO: wysyłanie wiadomości enterem
+# TODO: ustawianie nicku przez !username
 
 def on_disconnect():
     g.RUNNING = False
@@ -47,7 +50,7 @@ def on_disconnect():
         g.socket.close()
     if g.waiting_socket:
         g.waiting_socket.close()
-    for i in range(10,-1,-1):
+    for i in range(5,-1,-1):
         time.sleep(1)
         g.wnd_chat.display_application_message(
             f'Disconnected. The application will close in {i} seconds...')
@@ -154,7 +157,7 @@ def get_data_from_connection_dialog(g):
 
     def get_data_and_destroy_window():
         nonlocal data
-        g.USERNAME = ent_address.get()
+        g.USERNAME = ent_displayed_name.get()
         data = option.get(), str(ent_address.get())
         connection_dialog.destroy()
 
@@ -229,9 +232,16 @@ class ChatWindow(tk.Tk):
 
 def handle_incoming_messages(s):
     g.socket = s
+    send_message(f'!username {g.USERNAME}')
     while g.RUNNING:
         message = receive_message()
-        if message:
+        if not message:
+            continue
+        if message.startswith('!username '):
+            new_username = message[len('!username '):]
+            g.wnd_chat.display_application_message(f'{g.OTHER_USERNAME} has set their username to `{new_username}`')
+            g.OTHER_USERNAME = new_username
+        else:
             g.wnd_chat.display_other_user_message(message)
     if s:
         s.close()
@@ -257,7 +267,8 @@ def do_connect(ip):
     try:
         s.connect((ip, g.TCP_PORT))
     except:
-        raise Exception(f'Failed to connect to {ip}')
+        g.wnd_chat.display_application_message(f'Failed to connect to {ip}')
+        on_disconnect()
     addr = ':'.join((ip, str(g.TCP_PORT)))
     g.wnd_chat.display_application_message(f'Successfully connected to {addr}.')
     handle_incoming_messages(s)
