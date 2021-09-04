@@ -40,8 +40,6 @@ class GlobalVars:
 
 g = GlobalVars()
 
-# TODO: ustawianie nicku przez !username
-
 def on_disconnect():
     g.RUNNING = False
     g.wnd_chat.disable_sending()
